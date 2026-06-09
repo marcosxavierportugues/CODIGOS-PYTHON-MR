@@ -513,7 +513,8 @@ def build_aba(wb, titulo_aba, titulo_header, sub, bitolas,
 
 def build_total_geral(wb, data, bitolas, meta, grupos_label=None, grupo_col=None):
     """Aba final LISTA DE MATERIAIS / TOTAL GERAL"""
-    ws = wb.create_sheet("TOTAL GERAL")
+    aba_nome = f"TOTAL - {meta['elemento']} - {meta['segmento']}"[:31]
+    ws = wb.create_sheet(aba_nome)
 
     obs_parte = f" - {meta['observacao']}" if meta.get('observacao') else ""
     titulo_prefix = "RESUMO DE MATERIAIS" if meta['modo_resumo'] else "LISTA DE MATERIAIS TOTAL"
@@ -705,6 +706,17 @@ def main():
         print(f"\nCopiado para: D:\\Cache\\Claude\\{file_out.name}")
     except Exception as e:
         print(f"  (copia cache falhou: {e})")
+
+    abrir = _ask_yes_no(
+        "Planilha gerada",
+        f"Planilha gerada:\n{file_out.name}\n\nDeseja abrir a planilha agora?"
+    )
+    if abrir:
+        try:
+            os.startfile(file_out)
+            print(f"Abrindo: {file_out}")
+        except Exception as e:
+            print(f"  (erro ao abrir o arquivo: {e})")
 
     print(f"\nSalvo em:\n{file_out}")
     print(f"\nTotal : {len(data)} elementos")
