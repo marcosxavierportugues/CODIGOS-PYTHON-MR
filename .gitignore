@@ -1,0 +1,20 @@
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Backup files
+*_backup_*.py
+
+# Jupyter and VS Code
+.ipynb_checkpoints/
+.vscode/
+
+# Excel output / temp
+*.xlsx
+*.xls
+*.xlsm
+
+# OS files
+.DS_Store
+Thumbs.db
