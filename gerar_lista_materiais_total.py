@@ -6,7 +6,7 @@ Suporta: qualquer elemento (pilares, vigas, sapatas...)
          modo RESUMO ou COMPLETO
          nome de arquivo automatico por metadados
 """
-import re, os, sys
+import re, os, sys, unicodedata
 from datetime import datetime
 from pathlib import Path
 
@@ -75,6 +75,54 @@ def _ask_save(title, initial_name):
     if not p: raise SystemExit("Cancelado: salvar arquivo")
     return Path(p)
 
+def _ask_files(title):
+    r = _root()
+    p = filedialog.askopenfilenames(title=title, filetypes=[("Excel","*.xlsx *.xls")])
+    r.destroy()
+    if not p: raise SystemExit(f"Cancelado: {title}")
+    return [Path(x) for x in p]
+
+
+def _ask_main_action():
+    r = _root()
+    win = tk.Toplevel(r)
+    win.title("O que deseja fazer?")
+    win.attributes('-topmost', True)
+    tk.Label(win, text="O que deseja fazer?", font=("Arial", 12, "bold"), padx=20, pady=12).pack()
+    result = [3]
+    def choose(opt):
+        result[0] = opt
+        win.destroy()
+        r.destroy()
+    tk.Button(win, text="1 - GERAR LISTA DE MATERIAL", command=lambda: choose(1), width=30).pack(pady=4)
+    tk.Button(win, text="2 - UNIR LISTA DE MATERIAIS", command=lambda: choose(2), width=30).pack(pady=4)
+    tk.Button(win, text="3 - CANCELAR", command=lambda: choose(3), width=30, fg="white", bg="red").pack(pady=4)
+    win.protocol("WM_DELETE_WINDOW", lambda: choose(3))
+    win.wait_window()
+    return result[0]
+
+
+def _normalize_text(txt):
+    txt = str(txt or "").strip()
+    txt = unicodedata.normalize("NFKD", txt)
+    txt = "".join(ch for ch in txt if not unicodedata.combining(ch))
+    return txt.casefold()
+
+def _extract_element_category(value):
+    txt = _normalize_text(value)
+    txt = re.sub(r"\d+", "", txt)
+    txt = re.sub(r"[^a-z ]+", " ", txt)
+    txt = re.sub(r"\s+", " ", txt).strip()
+    return txt.split()[0] if txt.split() else ""
+
+def _extract_segment_label(filename, index):
+    name = str(filename)
+    m = re.search(r"(SEG(?:MENTO)?\s*\d+)", name, re.IGNORECASE)
+    if m:
+        label = m.group(1).upper().replace("SEGMENTO", "SEG")
+        return re.sub(r"\s+", " ", label).strip()
+    return f"SEG {index}"
+
 def _ask_choice(title, prompt, options):
     """Retorna opcao escolhida. options = lista de strings."""
     r = _root()
@@ -122,6 +170,157 @@ def _ask_yes_no(title, prompt):
     win.protocol("WM_DELETE_WINDOW", no)
     win.wait_window()
     return result[0]
+
+
+def _build_merge_sheet(wb, title, df, bitolas):
+    ws = wb.create_sheet(title[:31])
+    headers = ["ELEMENTO", "NIVEL", "CONCRETO_m3", "FORMA_m2"] + [f"ACO_{b}mm_kg" for b in bitolas]
+    for ci, h in enumerate(headers, 1):
+        _h(ws, 1, ci, h, fl=H_PILAR)
+    for ri, row in enumerate(df.to_dict(orient="records"), start=2):
+        for ci, h in enumerate(headers, 1):
+            value = row.get(h, 0 if h.startswith("ACO_") or h in ("CONCRETO_m3","FORMA_m2") else "")
+            fmt = "#,##0.000" if h.startswith("ACO_") or h in ("CONCRETO_m3","FORMA_m2") else None
+            al = R if fmt else L
+            _c(ws, ri, ci, value, fl=ALT[(ri-2) % 2], al=al, fmt=fmt)
+    for ci, w in enumerate([30, 18, 14, 14] + [14]*len(bitolas), 1):
+        ws.column_dimensions[get_column_letter(ci)].width = w
+    ws.freeze_panes = "A2"
+    return ws
+
+
+def _build_merge_summary_sheet(wb, summaries, bitolas):
+    ws = wb.create_sheet("RESUMO POR SEGMENTO")
+    headers = ["SEGMENTO", "ELEMENTO", "CONCRETO_m3", "FORMA_m2"] + [f"O{b}mm" for b in bitolas]
+    for ci, h in enumerate(headers, 1):
+        _h(ws, 1, ci, h, fl=H_PILAR)
+    for ri, summary in enumerate(summaries, start=2):
+        values = [summary["segment"], summary["group_label"], summary["totals"]["CONCRETO_m3"], summary["totals"]["FORMA_m2"]]
+        values += [summary["totals"].get(f"ACO_{b}mm_kg", 0) for b in bitolas]
+        for ci, value in enumerate(values, 1):
+            fmt = "#,##0.000" if ci >= 3 else None
+            al = R if fmt else L
+            _c(ws, ri, ci, value, fl=ALT[(ri-2) % 2], al=al, fmt=fmt)
+    total = {f"ACO_{b}mm_kg": sum(s["totals"].get(f"ACO_{b}mm_kg", 0) for s in summaries) for b in bitolas}
+    total["CONCRETO_m3"] = sum(s["totals"]["CONCRETO_m3"] for s in summaries)
+    total["FORMA_m2"] = sum(s["totals"]["FORMA_m2"] for s in summaries)
+    ri = len(summaries) + 2
+    _c(ws, ri, 1, "TOTAL GERAL", fnt=WF, fl=H_TOTAL, al=L)
+    _c(ws, ri, 2, summaries[0]["group_label"], fnt=WF, fl=H_TOTAL, al=L)
+    _c(ws, ri, 3, total["CONCRETO_m3"], fnt=WF, fl=H_TOTAL, al=R, fmt="#,##0.000")
+    _c(ws, ri, 4, total["FORMA_m2"], fnt=WF, fl=H_TOTAL, al=R, fmt="#,##0.000")
+    for idx, b in enumerate(bitolas, start=5):
+        _c(ws, ri, idx, total.get(f"ACO_{b}mm_kg", 0), fnt=WF, fl=H_TOTAL, al=R, fmt="#,##0.000")
+    for ci, w in enumerate([20, 20, 14, 14] + [14]*len(bitolas), 1):
+        ws.column_dimensions[get_column_letter(ci)].width = w
+    ws.freeze_panes = "A2"
+    return ws
+
+
+def _build_merge_total_sheet(wb, total, element_label, bitolas):
+    ws = wb.create_sheet(f"RESUMO TOTAL {element_label}"[:31])
+    headers = ["ELEMENTO", "CONCRETO_m3", "FORMA_m2"] + [f"O{b}mm" for b in bitolas]
+    for ci, h in enumerate(headers, 1):
+        _h(ws, 1, ci, h, fl=H_PILAR)
+    values = [element_label, total["CONCRETO_m3"], total["FORMA_m2"]] + [total.get(f"ACO_{b}mm_kg", 0) for b in bitolas]
+    for ci, value in enumerate(values, 1):
+        fmt = "#,##0.000" if ci >= 2 else None
+        al = R if fmt else L
+        _c(ws, 2, ci, value, fnt=WF, fl=H_TOTAL, al=al, fmt=fmt)
+    for ci, w in enumerate([30, 16, 16] + [14]*len(bitolas), 1):
+        ws.column_dimensions[get_column_letter(ci)].width = w
+    ws.freeze_panes = "A3"
+    return ws
+
+
+def _analyze_merge_files(paths):
+    summaries = []
+    for idx, path in enumerate(paths, start=1):
+        print(f"  Lendo: {path.name}")
+        df, bitolas, _ = load_qto(path)
+        categories = sorted({_extract_element_category(v) for v in df["ELEM"].astype(str).dropna() if str(v).strip()})
+        if not categories:
+            categories = [_extract_element_category(path.stem) or "DESCONHECIDO"]
+        levels = sorted({_normalize_text(v) for v in df["NIVEL"].astype(str).dropna() if str(v).strip()})
+        segment = _extract_segment_label(path.name, idx)
+        totals = {
+            "CONCRETO_m3": df["CONCRETO_m3"].sum() if "CONCRETO_m3" in df.columns else 0,
+            "FORMA_m2": df["FORMA_m2"].sum() if "FORMA_m2" in df.columns else 0,
+        }
+        for b in bitolas:
+            totals[f"ACO_{b}mm_kg"] = df.get(f"ACO_{b}mm_kg", 0).sum()
+        summaries.append({
+            "path": path,
+            "df": df,
+            "bitolas": bitolas,
+            "categories": categories,
+            "levels": levels,
+            "segment": segment,
+            "group_label": categories[0].upper() if categories else "ELEMENTOS",
+            "totals": totals,
+        })
+    group_sets = [set(s["categories"]) for s in summaries]
+    if len({tuple(sorted(g)) for g in group_sets}) > 1:
+        details = "\n".join(f"{s['path'].name}: {', '.join(s['categories'])}" for s in summaries)
+        messagebox.showinfo("Análise de Elementos", f"Diferenças de elementos encontradas:\n\n{details}")
+        if not _ask_yes_no("Divergência de Elementos", "Quer continuar mesmo assim?"):
+            raise SystemExit("Operação cancelada pelo usuário")
+    level_sets = [set(s["levels"]) for s in summaries]
+    if len({tuple(sorted(l)) for l in level_sets}) > 1:
+        details = "\n".join(f"{s['path'].name}: {', '.join(s['levels'])}" for s in summaries)
+        messagebox.showinfo("Análise de Níveis/Pavimentos", f"Diferenças de nível/pavimento encontradas:\n\n{details}")
+        if not _ask_yes_no("Divergência de Níveis", "Quer continuar mesmo assim?"):
+            raise SystemExit("Operação cancelada pelo usuário")
+    return summaries
+
+
+def merge_material_lists():
+    print("\n=== UNIR LISTA DE MATERIAIS ===")
+    paths = _ask_files("Selecione as planilhas para unir")
+    summaries = _analyze_merge_files(paths)
+    file_out = _ask_save("Salvar nova planilha unida como...", "UNIAO_LISTAS.xlsx")
+    wb = Workbook()
+    wb.remove(wb.active)
+    all_bitolas = sorted({b for s in summaries for b in s["bitolas"]})
+    group_label = summaries[0]["group_label"]
+    for s in summaries:
+        df = s["df"].copy()
+        for b in all_bitolas:
+            col = f"ACO_{b}mm_kg"
+            if col not in df.columns:
+                df[col] = 0.0
+        title = f"TODOS - {group_label} {s['segment']}"
+        _build_merge_sheet(wb, title, df, all_bitolas)
+    _build_merge_summary_sheet(wb, summaries, all_bitolas)
+    total = {"CONCRETO_m3": 0.0, "FORMA_m2": 0.0}
+    total.update({f"ACO_{b}mm_kg": 0.0 for b in all_bitolas})
+    for s in summaries:
+        total["CONCRETO_m3"] += s["totals"]["CONCRETO_m3"]
+        total["FORMA_m2"] += s["totals"]["FORMA_m2"]
+        for b in all_bitolas:
+            total[f"ACO_{b}mm_kg"] += s["totals"].get(f"ACO_{b}mm_kg", 0.0)
+    _build_merge_total_sheet(wb, total, group_label, all_bitolas)
+    wb.save(file_out)
+    try:
+        import shutil
+        cache = Path(r"D:\Cache\Claude")
+        cache.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(file_out, cache / file_out.name)
+        print(f"\nCopiado para: {cache / file_out.name}")
+    except Exception as e:
+        print(f"  (copia cache falhou: {e})")
+    abrir = _ask_yes_no(
+        "Planilha gerada",
+        f"Planilha gerada:\n{file_out.name}\n\nDeseja abrir a planilha agora?"
+    )
+    if abrir:
+        try:
+            os.startfile(file_out)
+            print(f"Abrindo: {file_out}")
+        except Exception as e:
+            print(f"  (erro ao abrir o arquivo: {e})")
+    print(f"\nSalvo em:\n{file_out}")
+    return
 
 # ─── METADADOS ───────────────────────────────────────────────────────────────
 
@@ -744,11 +943,25 @@ if __name__ == "__main__":
     ENV_VARS = ["LM_ELEMENTO","LM_PAVIMENTO","LM_SEGMENTO","LM_OBRA",
                 "LM_TIPO","LM_DATA","LM_MODO","LM_OBS"]
     while True:
-        continuar = main()
-        # Apos primeira rodada, limpar env vars para que proxima rodada
-        # use os dialogs (usuario pode querer dados diferentes)
-        for v in ENV_VARS:
-            os.environ.pop(v, None)
-        if not continuar:
-            print("\nFinalizado. Ate logo!")
+        action = _ask_main_action()
+        if action == 1:
+            try:
+                continuar = main()
+            except SystemExit:
+                continuar = False
+            for v in ENV_VARS:
+                os.environ.pop(v, None)
+            if not continuar:
+                print("\nFinalizado. Ate logo!")
+                break
+        elif action == 2:
+            try:
+                merge_material_lists()
+            except SystemExit as e:
+                print(str(e))
+            if not _ask_yes_no("Menu", "Deseja voltar ao menu principal?"):
+                print("\nFinalizado. Ate logo!")
+                break
+        else:
+            print("\nCancelado. Ate logo!")
             break
