@@ -89,15 +89,25 @@ def _ask_main_action():
     win.title("O que deseja fazer?")
     win.attributes('-topmost', True)
     tk.Label(win, text="O que deseja fazer?", font=("Arial", 12, "bold"), padx=20, pady=12).pack()
+    action = tk.IntVar(value=1)
+    options = [
+        ("Gerar lista de material", 1),
+        ("Unir lista de materiais", 2),
+        ("Cancelar", 3),
+    ]
+    for text, value in options:
+        tk.Radiobutton(win, text=text, variable=action, value=value,
+                       font=("Arial", 11), anchor="w").pack(fill="x", padx=20, pady=2)
     result = [3]
-    def choose(opt):
-        result[0] = opt
-        win.destroy()
-        r.destroy()
-    tk.Button(win, text="1 - GERAR LISTA DE MATERIAL", command=lambda: choose(1), width=30).pack(pady=4)
-    tk.Button(win, text="2 - UNIR LISTA DE MATERIAIS", command=lambda: choose(2), width=30).pack(pady=4)
-    tk.Button(win, text="3 - CANCELAR", command=lambda: choose(3), width=30, fg="white", bg="red").pack(pady=4)
-    win.protocol("WM_DELETE_WINDOW", lambda: choose(3))
+    def ok():
+        result[0] = action.get(); win.destroy(); r.destroy()
+    def cancel():
+        result[0] = 3; win.destroy(); r.destroy()
+    frame = tk.Frame(win)
+    frame.pack(pady=10)
+    tk.Button(frame, text="OK", command=ok, width=12).pack(side="left", padx=8)
+    tk.Button(frame, text="Cancelar", command=cancel, width=12, fg="white", bg="red").pack(side="left", padx=8)
+    win.protocol("WM_DELETE_WINDOW", cancel)
     win.wait_window()
     return result[0]
 
@@ -280,7 +290,9 @@ def merge_material_lists():
     summaries = _analyze_merge_files(paths)
     file_out = _ask_save("Salvar nova planilha unida como...", "UNIAO_LISTAS.xlsx")
     wb = Workbook()
-    wb.remove(wb.active)
+    active_sheet = wb.active
+    if active_sheet is not None:
+        wb.remove(active_sheet)
     all_bitolas = sorted({b for s in summaries for b in s["bitolas"]})
     group_label = summaries[0]["group_label"]
     for s in summaries:
@@ -492,6 +504,42 @@ def load_qto(path, default_nivel=None):
     df = _norm_cols(df)
     # remover colunas sem nenhum valor abaixo do título
     df = df.dropna(axis=1, how='all')
+
+    cols = [str(c).strip() for c in df.columns]
+    cols_upper = [c.upper() for c in cols]
+    if "ELEM" in cols_upper or "ELEMENTO" in cols_upper:
+        # Accept already-processed material list tables as input for merge mode.
+        if "ELEMENTO" in cols_upper and "ELEM" not in cols_upper:
+            original = df.columns[cols_upper.index("ELEMENTO")]
+            df = df.rename(columns={original: "ELEM"})
+            cols[cols_upper.index("ELEMENTO")] = "ELEM"
+            cols_upper[cols_upper.index("ELEMENTO")] = "ELEM"
+        if "NIVEL" not in cols_upper and "PAVIMENTO" in cols_upper:
+            original = df.columns[cols_upper.index("PAVIMENTO")]
+            df = df.rename(columns={original: "NIVEL"})
+            cols[cols_upper.index("PAVIMENTO")] = "NIVEL"
+            cols_upper[cols_upper.index("PAVIMENTO")] = "NIVEL"
+        aco_cols = [c for c in df.columns if re.match(r"ACO_[\d.]+mm_kg", str(c))]
+        if not aco_cols:
+            rename = {}
+            for c in df.columns:
+                m = re.match(r"O([\d.]+)mm", str(c))
+                if m:
+                    rename[c] = f"ACO_{m.group(1)}mm_kg"
+            if rename:
+                df = df.rename(columns=rename)
+                aco_cols = [c for c in df.columns if re.match(r"ACO_[\d.]+mm_kg", str(c))]
+        # Coerce numeric columns for already-processed material list tables.
+        numeric_cols = ["CONCRETO_m3", "FORMA_m2"] + aco_cols
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+        bitolas = sorted(
+            [float(re.search(r"ACO_([\d.]+)mm", c).group(1))
+             for c in aco_cols],
+            key=lambda x: x
+        )
+        return df, bitolas, False
 
     cols = list(df.columns)
     # Coluna NOME do elemento
