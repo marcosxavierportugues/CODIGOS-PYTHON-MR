@@ -5,6 +5,7 @@ __pycache__/
 
 # Backup files
 *_backup_*.py
+*.bak
 
 # Jupyter and VS Code
 .ipynb_checkpoints/

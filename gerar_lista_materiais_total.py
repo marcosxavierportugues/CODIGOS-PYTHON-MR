@@ -92,6 +92,7 @@ def _ask_choice(title, prompt, options):
     def cancel():
         if _confirm_cancel():
             raise SystemExit("Cancelado pelo usuário")
+        win.destroy(); r.destroy()
     tk.Button(win, text="OK", command=ok, width=10).pack(pady=8)
     tk.Button(win, text="Cancelar", command=cancel, fg="white", bg="red", width=10).pack(pady=2)
     win.protocol("WM_DELETE_WINDOW", cancel)
@@ -112,12 +113,13 @@ def _ask_yes_no(title, prompt):
     def cancel():
         if _confirm_cancel():
             raise SystemExit("Cancelado pelo usuário")
+        win.destroy(); r.destroy()
     frame = tk.Frame(win)
     frame.pack(pady=8)
     tk.Button(frame, text="SIM", command=yes, width=10).pack(side="left", padx=8)
     tk.Button(frame, text="NÃO", command=no, width=10).pack(side="left", padx=8)
     tk.Button(frame, text="Cancelar", command=cancel, fg="white", bg="red", width=10).pack(side="left", padx=8)
-    win.protocol("WM_DELETE_WINDOW", cancel)
+    win.protocol("WM_DELETE_WINDOW", no)
     win.wait_window()
     return result[0]
 
