@@ -289,14 +289,18 @@ def load_qto(path, default_nivel=None):
     """
     df = pd.read_excel(path, sheet_name=0)
     df = _norm_cols(df)
-    cols = list(df.columns)
-    print(f"  Colunas ({len(cols)}): {cols}")
+    # remover colunas sem nenhum valor abaixo do título
+    df = df.dropna(axis=1, how='all')
 
+    cols = list(df.columns)
     # Coluna NOME do elemento
     cand_name = [c for c in cols if "Name" in c and "Layer" not in c]
     if not cand_name:
         cand_name = [c for c in cols if "name" in c.lower() and "layer" not in c.lower()]
     col_name = cand_name[0] if cand_name else cols[0]
+    if col_name in df.columns and df.columns[0] != col_name:
+        cols = [col_name] + [c for c in df.columns if c != col_name]
+        df = df[cols]
 
     # Coluna NIVEL/LAYER
     cand_layer = [c for c in cols if "Layer" in c
