@@ -145,6 +145,21 @@ def _find_column(cols, keywords, exclude=None):
     return None
 
 
+def _find_columns(cols, keywords, exclude=None):
+    exclude = exclude or []
+    matches = []
+    for c in cols:
+        norm = _normalize_text(c)
+        if any(ex in norm for ex in exclude):
+            continue
+        if any(key in norm for key in keywords):
+            matches.append(c)
+            continue
+        if any(sub in norm for sub in ["elemento", "emento", "element", "elem", "nome", "name"]):
+            matches.append(c)
+    return matches
+
+
 def _ask_choice(title, prompt, options):
     """Retorna opcao escolhida. options = lista de strings."""
     r = _root()
@@ -196,13 +211,14 @@ def _ask_yes_no(title, prompt):
 
 def _build_merge_sheet(wb, title, df, bitolas):
     ws = wb.create_sheet(title[:31])
-    headers = ["ELEMENTO", "NIVEL", "CONCRETO_m3", "FORMA_m2"] + [f"ACO_{b}mm_kg" for b in bitolas]
+    field_names = ["ELEM", "NIVEL", "CONCRETO_m3", "FORMA_m2"] + [f"ACO_{b}mm_kg" for b in bitolas]
+    headers = ["ELEMENTO", "NIVEL", "CONCRETO_m3", "FORMA_m2"] + [f"O{b}mm kg" for b in bitolas]
     for ci, h in enumerate(headers, 1):
         _h(ws, 1, ci, h, fl=H_PILAR)
     for ri, row in enumerate(df.to_dict(orient="records"), start=2):
-        for ci, h in enumerate(headers, 1):
-            value = row.get(h, 0 if h.startswith("ACO_") or h in ("CONCRETO_m3","FORMA_m2") else "")
-            fmt = "#,##0.000" if h.startswith("ACO_") or h in ("CONCRETO_m3","FORMA_m2") else None
+        for ci, field in enumerate(field_names, 1):
+            value = row.get(field, 0 if field.startswith("ACO_") or field in ("CONCRETO_m3","FORMA_m2") else "")
+            fmt = "#,##0.000" if field.startswith("ACO_") or field in ("CONCRETO_m3","FORMA_m2") else None
             al = R if fmt else L
             _c(ws, ri, ci, value, fl=ALT[(ri-2) % 2], al=al, fmt=fmt)
     for ci, w in enumerate([30, 18, 14, 14] + [14]*len(bitolas), 1):
@@ -213,7 +229,7 @@ def _build_merge_sheet(wb, title, df, bitolas):
 
 def _build_merge_summary_sheet(wb, summaries, bitolas):
     ws = wb.create_sheet("RESUMO POR SEGMENTO")
-    headers = ["SEGMENTO", "ELEMENTO", "CONCRETO_m3", "FORMA_m2"] + [f"O{b}mm" for b in bitolas]
+    headers = ["SEGMENTO", "ELEMENTO", "CONCRETO_m3", "FORMA_m2"] + [f"O{b}mm kg" for b in bitolas]
     for ci, h in enumerate(headers, 1):
         _h(ws, 1, ci, h, fl=H_PILAR)
     for ri, summary in enumerate(summaries, start=2):
@@ -241,7 +257,7 @@ def _build_merge_summary_sheet(wb, summaries, bitolas):
 
 def _build_merge_total_sheet(wb, total, element_label, bitolas):
     ws = wb.create_sheet(f"RESUMO TOTAL {element_label}"[:31])
-    headers = ["ELEMENTO", "CONCRETO_m3", "FORMA_m2"] + [f"O{b}mm" for b in bitolas]
+    headers = ["ELEMENTO", "CONCRETO_m3", "FORMA_m2"] + [f"O{b}mm kg" for b in bitolas]
     for ci, h in enumerate(headers, 1):
         _h(ws, 1, ci, h, fl=H_PILAR)
     values = [element_label, total["CONCRETO_m3"], total["FORMA_m2"]] + [total.get(f"ACO_{b}mm_kg", 0) for b in bitolas]
@@ -476,6 +492,12 @@ def extract_bitola(desc):
     m = re.search(r"[Øø]?\s*([\d,.]+)\s*mm", str(desc), re.IGNORECASE)
     return float(m.group(1).replace(",", ".")) if m else None
 
+
+def _bitola_from_aco_column(column):
+    m = re.search(r"ACO_([\d.]+)mm", str(column))
+    return float(m.group(1)) if m else None
+
+
 def _norm_cols(df):
     """Normaliza nomes de colunas: remove \r\n, x000D_, espacos duplos e unidades de medida."""
     import re as _re
@@ -519,19 +541,33 @@ def load_qto(path, default_nivel=None):
 
     cols = [str(c).strip() for c in df.columns]
     cols_upper = [c.upper() for c in cols]
-    elem_col = _find_column(cols, ["elem", "elemento", "nome"])
-    if elem_col is not None:
-        if elem_col.upper() != "ELEM":
-            df = df.rename(columns={elem_col: "ELEM"})
-            cols[cols.index(elem_col)] = "ELEM"
-            cols_upper[cols_upper.index(elem_col.upper())] = "ELEM"
-    if "ELEM" in cols_upper or "ELEMENTO" in cols_upper or elem_col is not None:
+    raw_desc_cols = sorted(c for c in cols if "Descri" in c)
+    raw_qty_cols = sorted(c for c in cols if "Quantidade" in c or "Quantity" in c)
+    has_raw_qto_cols = bool(raw_desc_cols and raw_qty_cols)
+    element_exclude = [
+        "segmento", "material", "forma", "concreto",
+        "layer", "nivel", "nível", "pavimento", "pav", "piso", "id",
+        "type", "tipo", "category", "categoria", "family", "familia",
+    ]
+    elem_cols = _find_columns(cols, ["elem", "elemento", "nome"], exclude=element_exclude)
+    if elem_cols:
+        if "ELEM" not in cols_upper:
+            df["ELEM"] = ""
+        for c in elem_cols:
+            if c != "ELEM":
+                df["ELEM"] = df["ELEM"].where(df["ELEM"].astype(str).str.strip() != "",
+                                                  df[c].astype(str).str.strip())
+        df["ELEM"] = df["ELEM"].astype(str).str.strip()
+        df = df.drop(columns=[c for c in elem_cols if c != "ELEM"], errors="ignore")
+        cols = [str(c).strip() for c in df.columns]
+        cols_upper = [c.upper() for c in cols]
+    if ("ELEM" in cols_upper or "ELEMENTO" in cols_upper or elem_cols) and not has_raw_qto_cols:
         # Accept already-processed material list tables as input for merge mode.
         if "ELEM" not in cols_upper and "ELEMENTO" in cols_upper:
             original = df.columns[cols_upper.index("ELEMENTO")]
             df = df.rename(columns={original: "ELEM"})
-            cols[cols_upper.index("ELEMENTO")] = "ELEM"
-            cols_upper[cols_upper.index("ELEMENTO")] = "ELEM"
+            cols = [str(c).strip() for c in df.columns]
+            cols_upper = [c.upper() for c in cols]
         nivel_col = _find_column(cols, ["nivel", "nível", "pavimento", "pav", "piso"])
         if nivel_col is not None and nivel_col.upper() != "NIVEL":
             df = df.rename(columns={nivel_col: "NIVEL"})
@@ -565,16 +601,28 @@ def load_qto(path, default_nivel=None):
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
         bitolas = sorted(
-            [float(re.search(r"ACO_([\d.]+)mm", c).group(1))
-             for c in aco_cols],
+            [b for b in (_bitola_from_aco_column(c) for c in aco_cols) if b is not None],
             key=lambda x: x
         )
         return df, bitolas, False
 
     cols = list(df.columns)
     # Coluna NOME do elemento
-    col_name = _find_column(cols, ["name", "nome", "elemento", "elem"], exclude=["layer"])
-    if col_name is None:
+    elem_cols = _find_columns(cols, ["name", "nome", "elemento", "elem"], exclude=[
+        "layer", "nivel", "nível", "pavimento", "pav", "piso", "id",
+        "type", "tipo", "category", "categoria", "family", "familia",
+    ])
+    if elem_cols:
+        if "ELEM" not in df.columns:
+            df["ELEM"] = ""
+        for c in elem_cols:
+            if c != "ELEM":
+                df["ELEM"] = df["ELEM"].where(df["ELEM"].astype(str).str.strip() != "",
+                                                  df[c].astype(str).str.strip())
+        df["ELEM"] = df["ELEM"].astype(str).str.strip()
+        df = df.drop(columns=[c for c in elem_cols if c != "ELEM"], errors="ignore")
+        col_name = "ELEM"
+    else:
         col_name = cols[0]
     if col_name in df.columns and df.columns[0] != col_name:
         cols = [col_name] + [c for c in df.columns if c != col_name]
@@ -621,20 +669,39 @@ def load_qto(path, default_nivel=None):
         records.append(rec)
 
     result = pd.DataFrame(records)
-    aco_cols = sorted((c for c in result.columns if c.startswith("ACO_")),
-                      key=lambda x: float(re.search(r"ACO_([\d.]+)mm", x).group(1)))
-    bitolas = [float(re.search(r"ACO_([\d.]+)mm", c).group(1))
-               for c in aco_cols if result[c].sum() > 0]
+    aco_cols = sorted(
+        (c for c in result.columns if c.startswith("ACO_")),
+        key=lambda x: _bitola_from_aco_column(x) or 0.0,
+    )
+    bitolas = [b for c in aco_cols for b in (_bitola_from_aco_column(c),) if b is not None and result[c].sum() > 0]
     return result, bitolas, has_layer_col
 
 def load_segmentos(seg_files):
     frames = []
     for seg_label, f in seg_files.items():
         df = pd.read_excel(f, sheet_name=0)
-        name_cols = [c for c in df.columns if "Name" in c]
-        col = name_cols[0] if name_cols else df.columns[1]
-        tmp = df[[col]].copy()
-        tmp.columns = ["ELEM"]
+        df = _norm_cols(df).dropna(axis=1, how='all')
+        cols = [str(c).strip() for c in df.columns]
+        elem_cols = _find_columns(
+            cols,
+            ["name", "nome", "elemento", "elem"],
+            exclude=[
+                "layer", "nivel", "nível", "pavimento", "pav", "piso",
+                "segmento", "id", "type", "tipo", "category", "categoria",
+                "family", "familia",
+            ],
+        )
+        if elem_cols:
+            tmp = pd.DataFrame({"ELEM": [""] * len(df)})
+            for c in elem_cols:
+                tmp["ELEM"] = tmp["ELEM"].where(
+                    tmp["ELEM"].astype(str).str.strip() != "",
+                    df[c].astype(str).str.strip(),
+                )
+        else:
+            col = df.columns[1] if len(df.columns) > 1 else df.columns[0]
+            tmp = df[[col]].copy()
+            tmp.columns = ["ELEM"]
         tmp["ELEM"]     = tmp["ELEM"].astype(str).str.strip()
         tmp["SEGMENTO"] = seg_label
         frames.append(tmp)
@@ -920,7 +987,9 @@ def main():
     print(f"  Niveis    : {niveis_unicos}")
 
     wb = Workbook()
-    wb.remove(wb.active)  # remove aba default
+    active_sheet = wb.active
+    if active_sheet is not None:
+        wb.remove(active_sheet)  # remove aba default
 
     # ─── Estrutura de abas ─────────────────────────────────────────────────
     if multi_seg and multi_niv:
