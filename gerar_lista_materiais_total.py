@@ -133,6 +133,18 @@ def _extract_segment_label(filename, index):
         return re.sub(r"\s+", " ", label).strip()
     return f"SEG {index}"
 
+
+def _find_column(cols, keywords, exclude=None):
+    exclude = exclude or []
+    for c in cols:
+        norm = _normalize_text(c)
+        if any(ex in norm for ex in exclude):
+            continue
+        if any(key in norm for key in keywords):
+            return c
+    return None
+
+
 def _ask_choice(title, prompt, options):
     """Retorna opcao escolhida. options = lista de strings."""
     r = _root()
@@ -507,18 +519,36 @@ def load_qto(path, default_nivel=None):
 
     cols = [str(c).strip() for c in df.columns]
     cols_upper = [c.upper() for c in cols]
-    if "ELEM" in cols_upper or "ELEMENTO" in cols_upper:
+    elem_col = _find_column(cols, ["elem", "elemento", "nome"])
+    if elem_col is not None:
+        if elem_col.upper() != "ELEM":
+            df = df.rename(columns={elem_col: "ELEM"})
+            cols[cols.index(elem_col)] = "ELEM"
+            cols_upper[cols_upper.index(elem_col.upper())] = "ELEM"
+    if "ELEM" in cols_upper or "ELEMENTO" in cols_upper or elem_col is not None:
         # Accept already-processed material list tables as input for merge mode.
-        if "ELEMENTO" in cols_upper and "ELEM" not in cols_upper:
+        if "ELEM" not in cols_upper and "ELEMENTO" in cols_upper:
             original = df.columns[cols_upper.index("ELEMENTO")]
             df = df.rename(columns={original: "ELEM"})
             cols[cols_upper.index("ELEMENTO")] = "ELEM"
             cols_upper[cols_upper.index("ELEMENTO")] = "ELEM"
-        if "NIVEL" not in cols_upper and "PAVIMENTO" in cols_upper:
-            original = df.columns[cols_upper.index("PAVIMENTO")]
-            df = df.rename(columns={original: "NIVEL"})
-            cols[cols_upper.index("PAVIMENTO")] = "NIVEL"
-            cols_upper[cols_upper.index("PAVIMENTO")] = "NIVEL"
+        nivel_col = _find_column(cols, ["nivel", "nível", "pavimento", "pav", "piso"])
+        if nivel_col is not None and nivel_col.upper() != "NIVEL":
+            df = df.rename(columns={nivel_col: "NIVEL"})
+            cols[cols.index(nivel_col)] = "NIVEL"
+            cols_upper[cols_upper.index(nivel_col.upper())] = "NIVEL"
+        if "CONCRETO_m3" not in cols_upper:
+            concrete_col = _find_column(cols, ["concreto"], exclude=["kg", "mm"])
+            if concrete_col is not None:
+                df = df.rename(columns={concrete_col: "CONCRETO_m3"})
+                cols[cols.index(concrete_col)] = "CONCRETO_m3"
+                cols_upper[cols_upper.index(concrete_col.upper())] = "CONCRETO_m3"
+        if "FORMA_m2" not in cols_upper:
+            forma_col = _find_column(cols, ["forma"], exclude=["infor"])
+            if forma_col is not None:
+                df = df.rename(columns={forma_col: "FORMA_m2"})
+                cols[cols.index(forma_col)] = "FORMA_m2"
+                cols_upper[cols_upper.index(forma_col.upper())] = "FORMA_m2"
         aco_cols = [c for c in df.columns if re.match(r"ACO_[\d.]+mm_kg", str(c))]
         if not aco_cols:
             rename = {}
@@ -543,21 +573,17 @@ def load_qto(path, default_nivel=None):
 
     cols = list(df.columns)
     # Coluna NOME do elemento
-    cand_name = [c for c in cols if "Name" in c and "Layer" not in c]
-    if not cand_name:
-        cand_name = [c for c in cols if "name" in c.lower() and "layer" not in c.lower()]
-    col_name = cand_name[0] if cand_name else cols[0]
+    col_name = _find_column(cols, ["name", "nome", "elemento", "elem"], exclude=["layer"])
+    if col_name is None:
+        col_name = cols[0]
     if col_name in df.columns and df.columns[0] != col_name:
         cols = [col_name] + [c for c in df.columns if c != col_name]
         df = df[cols]
 
     # Coluna NIVEL/LAYER
-    cand_layer = [c for c in cols if "Layer" in c
-                  and "Layer Id" not in c and "Name" not in c]
-    if not cand_layer:
-        cand_layer = [c for c in cols if "layer" in c.lower()
-                      and "id" not in c.lower() and "name" not in c.lower()]
-    col_layer = cand_layer[0] if cand_layer else None
+    col_layer = _find_column(cols, ["layer"], exclude=["name", "nome"])
+    if col_layer is None:
+        col_layer = _find_column(cols, ["nivel", "nível", "pavimento", "pav", "piso"], exclude=["name", "nome"])
     has_layer_col = col_layer is not None
     if not has_layer_col:
         print(f"  Sem coluna Layer -> nivel = '{default_nivel or 'UNICO'}'")
